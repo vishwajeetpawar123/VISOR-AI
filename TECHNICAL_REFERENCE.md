@@ -1,4 +1,4 @@
-# Attendance System v2.5 - "Teeth to Bone" Technical Reference
+# Attendance System v2.5 - Technical Reference
 
 **Purpose:** This document is an exhaustive reference manual for the Attendance System v2.5, designed for generating comprehensive mind maps and deep technical analysis. It covers every variable, logic gate, and architectural decision.
 
