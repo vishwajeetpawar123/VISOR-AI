@@ -33,7 +33,7 @@
 
 ---
 
-## 🧠 How it Works (Under the Hood)
+## 🧠 How it Works 
 
 ### The Logic Gate (3-Second Rule)
 
