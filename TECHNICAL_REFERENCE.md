@@ -4,7 +4,7 @@
 
 ---
 
-[VISUAL UNDERSTANGING](Digital_Sentry_Architectural_Tour.pdf)
+
 
 ## 1. System Anatomy
 
