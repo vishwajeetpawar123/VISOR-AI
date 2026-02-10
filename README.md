@@ -87,7 +87,24 @@ Visor AI is designed to be **Air-Gapped**.
     cd visor-ai
     ```
 
-2. **Install Dependencies**
+2. **Create & Activate Virtual Environment**
+    * It is recommended to use a virtual environment named `.venv_new` to match the project scripts.
+
+    **Windows:**
+
+    ```bash
+    python -m venv .venv_new
+    .\.venv_new\Scripts\activate
+    ```
+
+    **Linux/Mac:**
+
+    ```bash
+    python3 -m venv .venv_new
+    source .venv_new/bin/activate
+    ```
+
+3. **Install Dependencies**
 
     ```bash
     pip install -r requirements.txt
@@ -95,17 +112,17 @@ Visor AI is designed to be **Air-Gapped**.
 
     *(Note: Ensures you have CMake installed for dlib)*
 
-3. **Setup Faces**
+4. **Setup Faces**
     * Place photo of students in the `/faces` directory.
     * Name them `Firstname_Lastname.jpg`.
 
-4. **Run the System**
+5. **Run the System**
 
     ```bash
     python final_attendance_app.py
     ```
 
-5. **Access Dashboard**
+6. **Access Dashboard**
     * Open Browser: `http://127.0.0.1:5000`
 
 ---
