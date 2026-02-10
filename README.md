@@ -9,6 +9,14 @@
 
 ---
 
+---
+
+## 📚 Technical Documentation
+
+For a deep dive into the system architecture, memory management, and logic flows, please refer to the [Technical Reference Manual](TECHNICAL_REFERENCE.md).
+
+---
+
 ## 🚀 The Proposal
 
 **Smart Campus Challenge:** Traditional attendance systems are slow, manual, and prone to "proxy" cheating. Security cameras record passively but provide no real-time intelligence.
@@ -133,12 +141,5 @@ Visor AI is designed to be **Air-Gapped**.
 * **Mobile App:** Integration for push notifications on unauthorized entry.
 * **Emotion Analysis:** Gauging student engagement during lectures.
 
----
-
-## 📚 Technical Documentation
-
-For a deep dive into the system architecture, memory management, and logic flows, please refer to the [Technical Reference Manual](TECHNICAL_REFERENCE.md).
-
----
 
 *Built with ❤️ for the Smart Campus Hackathon.*
