@@ -1,146 +1,127 @@
-# Attendance System v2.5 - "Teeth to Bone" Technical Reference
+# 👁️ Visor AI: The "Living" Attendance System
 
-**Purpose:** This document is an exhaustive reference manual for the Attendance System v2.5, designed for generating comprehensive mind maps and deep technical analysis. It covers every variable, logic gate, and architectural decision.
+> **"Transforming passive CCTV into an active, intelligent campus assistant."**
 
----
-
-[VISUAL UNDERSTANGING](Digital_Sentry_Architectural_Tour.pdf)
-
-## 1. System Anatomy
-
-### 1.1 File Structure
-*   **`final_attendance_app.py`**: The simplified monolithic kernel. Contains:
-    *   *Configuration Constants*: Settings for paths and timeouts.
-    *   *Web Server Class*: Flask application definitions.
-    *   *Vision Logic*: OpenCV and Face Recognition loops.
-    *   *Process Management*: Multiprocessing entry point.
-*   **`faces/`**: The "Knowledge Base".
-    *   *Input*: `.jpg` or `.png` images of known individuals.
-    *   *Processing*: Read at startup to generate 128-dimensional vector embeddings.
-*   **`attendance_photos/`**: The "Evidence Locker".
-    *   *Output*: Time-stamped images of people recognized by the system.
-    *   *Naming Convention*: `Attendance_[Name]_[YYYYMMDD_HHMMSS].jpg`.
-*   **`lobby_log.csv`**: The "Persistent Ledger".
-    *   *Schema*: `Timestamp, Event, Name, PhotoPath`
-    *   *Events*: "ENTERED", "EXITED".
-
-### 1.2 Key Variables (The State)
-*   **`known_face_encodings`** (List of Lists): The mathematical representation of every face in `faces/`. Each item is an array of 128 floating-point numbers.
-*   **`known_face_names`** (List of Strings): Parallel list to `encodings`. Index `i` in `names` corresponds to Index `i` in `encodings`.
-*   **`present_people`** (Dictionary):
-    *   *Key*: Name (String, e.g., "Vishwash").
-    *   *Value*: Last Seen Timestamp (Float, Unix Epic Time).
-    *   *Role*: Tracks who is currently standing in front of the camera to prevent duplicate logs and detect when they leave.
-*   **`process_this_frame`** (Integer): A counter used for modulo arithmetic to trigger the heavy face recognition logic only on specific frames.
-*   **`server_process`** (multiprocessing.Process): A handle to the child process running the Flask web server. Is `None` when server is OFF.
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green.svg)](https://opencv.org/)
+[![Flask](https://img.shields.io/badge/Flask-Web%20Server-lightgrey.svg)](https://flask.palletsprojects.com/)
+[![Ollama](https://img.shields.io/badge/AI-Ollama%20Local-orange.svg)](https://ollama.ai/)
 
 ---
 
-## 2. The Computer Vision Pipeline (The "Brain")
+## 🚀 The Proposal
 
-This pipeline runs inside the `while True` loop of the main process.
+**Smart Campus Challenge:** Traditional attendance systems are slow, manual, and prone to "proxy" cheating. Security cameras record passively but provide no real-time intelligence.
 
-### Step 1: Acquisition
-*   **Source**: `cv2.VideoCapture(0)` (Default Webcam).
-*   **Raw Data**: A numpy array of shape `(480, 640, 3)` (Height, Width, BGR Channels).
+**Our Solution:** **Visor AI** is a dual-mode system (Surveillance + Attendance) that uses existing camera infrastructure to:
 
-### Step 2: Pre-processing (The CPU Optimization)
-*   **Resizing**: `cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)`
-    *   *Input*: 307,200 pixels.
-    *   *Output*: 19,200 pixels (160x120).
-    *   *Why*: Reduces dimensionality for the O(N^2) or O(N log N) complexity of detection algorithms.
-*   **Color Conversion**:
-    *   *Haar needs*: Grayscale (`cv2.cvtColor(..., cv2.COLOR_BGR2GRAY)`).
-    *   *dlib needs*: RGB (`cv2.cvtColor(..., cv2.COLOR_BGR2RGB)`).
-
-### Step 3: Detection (Haar Cascade)
-*   **Algorithm**: Viola-Jones Object Detection Framework.
-*   **Mechanism**: Slides a window over the grayscale image seeking Haar-like features (e.g., bridge of nose is lighter than eyes).
-*   **Settings**: `scaleFactor=1.1`, `minNeighbors=5`.
-*   **Output**: List of Rectangles `[(x, y, w, h)]`. Represents *where* a face is, not *who* it is.
-
-### Step 4: Recognition (dlib ResNet)
-*   **Gate**: Only runs if `process_this_frame % 5 == 0`.
-*   **Encoding**:
-    *   The 160x120 RGB image + The Rectangle locations are passed to `face_recognition.face_encodings`.
-    *   dlib aligns the face landmarks (eyes, nose, chin).
-    *   It passes the aligned face through a Deep ResNet Model.
-    *   **Output**: A 128-d vector (embedding).
-*   **Matching**:
-    *   **Euclidean Distance**: Calculates the geometric distance between the live vector and all `known_face_encodings`.
-    *   **Threshold**: Default tolerance is 0.6.
-    *   **Verdict**: The name with the smallest distance (if < 0.6) is the match.
+1. **Automate Attendance:** Recognize students seamlessly as they walk in.
+2. **Ensure Security:** Monitor for unauthorized access in real-time.
+3. **Provide Insights:** An integrated **Local LLM Assistant** that allows teachers to *chat* with their attendance logs (e.g., "Who was late today?").
 
 ---
 
-## 3. The Memory Architecture (RAM Strategy)
+## ✨ Key Features
 
-### 3.1 The "Heavy" Process (Main)
-*   **Loads**: `cv2` (OpenCV), `numpy`, `face_recognition` (wrapper), `dlib` (C++ Engine).
-*   **Memory Footprint**:
-    *   Python Interpreter: ~20MB
-    *   dlib Models (`shape_predictor_68_face_landmarks.dat` + `resnet_model_v1.dat`): ~500MB
-    *   Video Buffers: ~50MB
-    *   **Total**: ~600MB.
-
-### 3.2 The "Light" Process (Web Server)
-*   **Trigger**: Spawns only when user presses 's'.
-*   **Loads**: `flask`, `socket`, `threading`.
-*   **Crucial Optimization**: The `import face_recognition` statement is *hidden* inside the Main Loop function scope. Therefore, this process *never* imports dlib.
-*   **Memory Footprint**: ~30MB.
-*   **Lifecycle**:
-    *   *Start*: `multiprocessing.Process(target=run_flask_app).start()` -> Clones interpreter -> Imports Flask -> Listens on Port 5000.
-    *   *Stop*: `process.terminate()` -> SIGTERM signal -> Memory instantly released to OS.
+* **🧐 Real-Time Face Recognition:** Sub-second identification using dlib & OpenCV.
+* **🧠 Local AI Interaction:** Built-in Chatbox powered by **Ollama (Qwen 2.5)**. No data leaves the campus.
+* **🛡️ Dual Modes:**
+  * **Surveillance Mode:** Logs all entries/exits for security.
+  * **Attendance Mode:** optimized for classrooms (preventing duplicate logs).
+* **🎨 Premium UI:** Glassmorphism design inspired by Stripe, making enterprise tools feel modern.
+* **📊 Smart Logging:** Tracks Entry Time, Exit Time, and Duration automatically.
 
 ---
 
-## 4. The Web Interface (The "Frontend")
+## 🧠 How it Works (Under the Hood)
 
-### 4.1 Backend (Flask)
-*   **Route `/`**: Serves `HTML_TEMPLATE`.
-*   **Route `/api/photos`**:
-    *   Scans `attendance_photos/`.
-    *   Sorts by `os.path.getmtime` (Reverse).
-    *   Parses filenames to human-readable names.
-    *   Returns JSON: `[{"url": "/photos/...", "name": "...", "timestamp": "..."}]`
-*   **Route `/photos/<filename>`**: Static file server for the images.
+### The Logic Gate (3-Second Rule)
 
-### 4.2 Frontend (HTML/JS)
-*   **Styling**: Dark Mode CSS Variables (`--bg-color: #0d1117`).
-*   **Logic**:
-    *   `fetchPhotos()`: Async Await function.
-    *   **Data Binding**: Compares `grid.dataset.key` (a hash of current filenames) vs new filenames. Only updates DOM if changed (Virtual DOM concept).
-    *   **Injection**: Appends HTML Strings to the Grid Container.
+Visor AI distinguishes between a casual glance and a confirmed attendance.
 
----
+1. **Entry:** When a known face is detected, they are marked as "Present" and their timestamp is logged.
+2. **Monitoring:** The system tracks them as long as they are in frame.
+3. **Exit:** If the face is lost for more than **3 Seconds**, an "EXIT" event is logged and the duration is calculated.
 
-## 5. Logic Trace: The "Entry" Event
+### Performance Optimization
 
-What happens when "User X" walks in?
+* **0.25x Resizing:** We downscale the video feed to 1/4th resolution for the face detection pipeline, significantly reducing CPU load.
+* **Frame Skipping:** The heavy Face Recognition (ResNet) model only runs on every **5th frame**, balancing real-time speed with high accuracy.
 
-1.  **Frame N**: Camera captures User X.
-2.  **Detection**: Haar Cascade finds a face rectangle.
-3.  **Recognition**: dlib computes vector, matches to "User X".
-4.  **State Check**: Code checks `if "User X" in present_people`.
-    *   *Result*: False.
-5.  **Action Trigger**:
-    *   **Log**: Appends line to csv: `2023-10-27 10:00:00,ENTERED,User X,...`
-    *   **Evidence**:
-        *   Copies current frame.
-        *   `cv2.putText`: Burns "10:00:00 - User X" in red text onto the pixels.
-        *   `cv2.imwrite`: Saves JPG to disk.
-6.  **State Update**: `present_people["User X"] = <Current Time>`.
+## 🛡️ Privacy Architecture
+
+Visor AI is designed to be **Air-Gapped**.
+
+* **Local Embeddings:** Face data is converted to 128-d vectors and stored in a local `.pkl` file. No images are sent to the cloud.
+* **Local LLM:** The AI Assistant allows natural language queries by running **Ollama** locally, ensuring student data never leaves the campus server.
 
 ---
 
-## 6. Logic Trace: The "Exit" Event
+## 🛠️ Tech Stack
 
-1.  **Frame N+100**: User X walks away.
-2.  **Detection**: No faces found.
-3.  **Loop**: Code iterates through keys in `present_people`.
-4.  **Timestamp Check**: `Current Time - present_people["User X"]`.
-    *   *Value*: 3.1 seconds.
-    *   *Threshold*: 3.0 seconds.
-5.  **Action Trigger**:
-    *   **Log**: Appends line to csv: `...,EXITED,User X`
-    *   **State Update**: `del present_people["User X"]`.
+* **Core:** Python 3.12
+* **Vision:** OpenCV, Face_Recognition (dlib)
+* **Web Framework:** Flask (Lightweight/Fast)
+* **Generative AI:** Ollama (Local Large Language Model)
+* **Database:** CSV (Rapid Prototyping) / Easy migration to SQL.
+* **Frontend:** HTML5, CSS3 (Vanilla), JavaScript.
+
+---
+
+## 📸 Screenshots
+
+*(Placeholders for Hackathon Submission)*
+
+| Live Feed & Dashboard | AI Chat Assistant |
+| :---: | :---: |
+| *Real-time recognition with bounding boxes.* | *Asking the AI "Who is absent?"* |
+
+---
+
+## ⚙️ Installation & Setup
+
+1. **Clone the Repository**
+
+    ```bash
+    git clone https://github.com/yourusername/visor-ai.git
+    cd visor-ai
+    ```
+
+2. **Install Dependencies**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    *(Note: Ensures you have CMake installed for dlib)*
+
+3. **Setup Faces**
+    * Place photo of students in the `/faces` directory.
+    * Name them `Firstname_Lastname.jpg`.
+
+4. **Run the System**
+
+    ```bash
+    python final_attendance_app.py
+    ```
+
+5. **Access Dashboard**
+    * Open Browser: `http://127.0.0.1:5000`
+
+---
+
+## 🔮 Future Roadmap
+
+* **Teacher's Transcompiler:** Voice-activated macros (e.g., "Mark everyone present except John").
+* **Mobile App:** Integration for push notifications on unauthorized entry.
+* **Emotion Analysis:** Gauging student engagement during lectures.
+
+---
+
+## 📚 Technical Documentation
+
+For a deep dive into the system architecture, memory management, and logic flows, please refer to the [Technical Reference Manual](TECHNICAL_REFERENCE.md).
+
+---
+
+*Built with ❤️ for the Smart Campus Hackathon.*

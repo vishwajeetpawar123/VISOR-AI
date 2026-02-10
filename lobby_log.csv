@@ -1,3 +1,6 @@
-Timestamp,Event,Name
-
-2025-12-08 00:03:49,ENTERED,vishwajeet,attendance_photos/Attendance_vishwajeet_20251208_000349.jpg
+Timestamp,Event,Name,PhotoPath
+2026-02-11 01:16:05 AM,EXITED,Obama,
+2026-02-11 01:16:12 AM,ENTERED,Obama,C:\Users\vishw\Desktop\attendance system v2.5\attendance_photos/Attendance_Obama_20260211_011612.jpg
+2026-02-11 01:16:24 AM,EXITED,Obama,
+2026-02-11 01:16:25 AM,ENTERED,Obama,C:\Users\vishw\Desktop\attendance system v2.5\attendance_photos/Attendance_Obama_20260211_011625.jpg
+2026-02-11 01:16:30 AM,EXITED,Obama,
