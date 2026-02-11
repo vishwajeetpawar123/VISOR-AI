@@ -78,7 +78,7 @@ Visor AI is designed to be **Air-Gapped**.
 
 ## 📸 Screenshots
 
-[PROTOTYPE_IMAGES](./folder_name)
+[PROTOTYPE_IMAGES](./working prototype images)
 
 
 | Live Feed & Dashboard | AI Chat Assistant |
