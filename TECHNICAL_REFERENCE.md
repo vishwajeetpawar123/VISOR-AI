@@ -4,113 +4,149 @@
 
 ---
 
-
-
 ## 1. System Anatomy
 
 ### 1.1 File Structure
-*   **`final_attendance_app.py`**: The simplified monolithic kernel. Contains:
-    *   *Configuration Constants*: Settings for paths and timeouts.
-    *   *Web Server Class*: Flask application definitions.
-    *   *Vision Logic*: OpenCV and Face Recognition loops.
-    *   *Process Management*: Multiprocessing entry point.
-*   **`faces/`**: The "Knowledge Base".
-    *   *Input*: `.jpg` or `.png` images of known individuals.
-    *   *Processing*: Read at startup to generate 128-dimensional vector embeddings.
-*   **`attendance_photos/`**: The "Evidence Locker".
-    *   *Output*: Time-stamped images of people recognized by the system.
-    *   *Naming Convention*: `Attendance_[Name]_[YYYYMMDD_HHMMSS].jpg`.
-*   **`lobby_log.csv`**: The "Persistent Ledger".
-    *   *Schema*: `Timestamp, Event, Name, PhotoPath`
-    *   *Events*: "ENTERED", "EXITED".
+
+* **`final_attendance_app.py`**: The monolithic kernel. Contains:
+  * *Configuration*: Paths, Thresholds (`EXIT_THRESHOLD=3.0`), and Modes.
+  * *Web Server*: Flask application running in a **Daemon Thread**.
+  * *Vision Loop*: Main infinite loop handling Camera, Detection, and Logic.
+  * *Ollama Integration*: Chat interface with context-aware prompts.
+* **`reencode_faces.py`**: The "Encoder" script.
+  * *Role*: Off-line processing. Reads `faces/` directory, detects faces using **YuNet**, aligns them, and generates embeddings using **SFace**.
+  * *Output*: Saves `face_encodings_sface.pkl`.
+* **`face_encodings_sface.pkl`**: The "Knowledge Base".
+  * *Format*: Python Pickle file.
+  * *Content*: Dictionary `{'Name': numpy_array(128-d vector)}`.
+* **`models/`**: The "Brain Stem".
+  * `face_detection_yunet_2023mar.onnx`: YuNet Face Detector.
+  * `face_recognition_sface_2021dec.onnx`: SFace Recognizer.
+  * `haarcascade_eye_tree_eyeglasses.xml`: Start-of-the-art Eye Classifier for blink detection.
+* **`attendance_photos/`**: The "Evidence Locker".
+  * *Naming*: `Attendance_[SafeName]_[YYYYMMDD_HHMMSS].jpg`.
+  * *Metadata*: Burned-in text overlay on the image itself.
+* **`lobby_log.csv`**: The "Persistent Ledger".
+  * *Schema*: `Timestamp, Event, Name, PhotoPath`.
 
 ### 1.2 Key Variables (The State)
-*   **`known_face_encodings`** (List of Lists): The mathematical representation of every face in `faces/`. Each item is an array of 128 floating-point numbers.
-*   **`known_face_names`** (List of Strings): Parallel list to `encodings`. Index `i` in `names` corresponds to Index `i` in `encodings`.
-*   **`present_people`** (Dictionary):
-    *   *Key*: Name (String, e.g., "Vishwash").
-    *   *Value*: Last Seen Timestamp (Float, Unix Epic Time).
-    *   *Role*: Tracks who is currently standing in front of the camera to prevent duplicate logs and detect when they leave.
-*   **`process_this_frame`** (Integer): A counter used for modulo arithmetic to trigger the heavy face recognition logic only on specific frames.
-*   **`server_process`** (multiprocessing.Process): A handle to the child process running the Flask web server. Is `None` when server is OFF.
+
+* **`known_faces`** (Dict): Loaded from pickle. Maps Names to SFace Embeddings.
+* **`present_people`** (Dict):
+  * *Key*: Name (String).
+  * *Value*: Last Seen Timestamp (Float, Unix Epic Time).
+  * *Role*: Heartbeat mechanism to track presence in the "Lobby".
+* **`frame_buffer`** (Global Variable):
+  * *Role*: Shared memory buffer holding the current video frame.
+  * *Access*: Written by Main Loop, Read by Flask Thread (for MJPEG stream).
+* **`current_mode`** (String):
+  * `SURVEILLANCE`: Passive, logging-only, night vision enabled.
+  * `ATTENDANCE`: Interactive, requires Blink verification, Voice feedback.
+* **`attn_state`** (State Machine):
+  * Values: `SEARCHING`, `DETECTED`, `WAITING_BLINK`, `RECOGNIZING`, `COOLDOWN`.
+  * *Role*: Controls the interactive flow in Attendance Mode.
 
 ---
 
 ## 2. The Computer Vision Pipeline (The "Brain")
 
-This pipeline runs inside the `while True` loop of the main process.
+This pipeline runs inside the `while True` loop of the main thread.
 
-### Step 1: Acquisition
-*   **Source**: `cv2.VideoCapture(0)` (Default Webcam).
-*   **Raw Data**: A numpy array of shape `(480, 640, 3)` (Height, Width, BGR Channels).
+### Step 1: Acquisition & Enhancement
 
-### Step 2: Pre-processing (The CPU Optimization)
-*   **Resizing**: `cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)`
-    *   *Input*: 307,200 pixels.
-    *   *Output*: 19,200 pixels (160x120).
-    *   *Why*: Reduces dimensionality for the O(N^2) or O(N log N) complexity of detection algorithms.
-*   **Color Conversion**:
-    *   *Haar needs*: Grayscale (`cv2.cvtColor(..., cv2.COLOR_BGR2GRAY)`).
-    *   *dlib needs*: RGB (`cv2.cvtColor(..., cv2.COLOR_BGR2RGB)`).
+* **Source**: `cv2.VideoCapture(0)` @ 640x480.
+* **Adaptive Night Vision**:
+  * *Trigger*: Every 6th frame.
+  * *Check*: Resize to 320x240 -> Calculate Mean Brightness.
+  * *Action*: If brightness < 90, apply Gamma Correction (Gamma=1.7).
+  * *Hysteresis*: Turns off only if brightness > 110.
 
-### Step 3: Detection (Haar Cascade)
-*   **Algorithm**: Viola-Jones Object Detection Framework.
-*   **Mechanism**: Slides a window over the grayscale image seeking Haar-like features (e.g., bridge of nose is lighter than eyes).
-*   **Settings**: `scaleFactor=1.1`, `minNeighbors=5`.
-*   **Output**: List of Rectangles `[(x, y, w, h)]`. Represents *where* a face is, not *who* it is.
+### Step 2: Detection (YuNet)
 
-### Step 4: Recognition (dlib ResNet)
-*   **Gate**: Only runs if `process_this_frame % 5 == 0`.
-*   **Encoding**:
-    *   The 160x120 RGB image + The Rectangle locations are passed to `face_recognition.face_encodings`.
-    *   dlib aligns the face landmarks (eyes, nose, chin).
-    *   It passes the aligned face through a Deep ResNet Model.
-    *   **Output**: A 128-d vector (embedding).
-*   **Matching**:
-    *   **Euclidean Distance**: Calculates the geometric distance between the live vector and all `known_face_encodings`.
-    *   **Threshold**: Default tolerance is 0.6.
-    *   **Verdict**: The name with the smallest distance (if < 0.6) is the match.
+* **Model**: YuNet (published in CVPR 2019).
+* **Input**: Resized frame (320x240) for speed ("Ultra Lite").
+* **Thresholds**: Confidence `0.6`, NMS `0.3`.
+* **Output**: Bounding Box, Landmarks (Eyes, Nose, Mouth), Confidence.
+
+### Step 3: Logic Branching (Modes)
+
+#### Mode A: Surveillance (The "Ghost")
+
+* **Frequency**: Every 6th frame.
+* **Logic**:
+    1. Detect Faces.
+    2. **Recognition**: SFace Match (Cosine Distance).
+    3. **Threshold**: `COSINE_THRESHOLD = 0.45`.
+    4. **Action**: If Match Found, Log "ENTERED", update `present_people`.
+
+#### Mode B: Attendance (The "Gatekeeper")
+
+* **Frequency**: Every 3rd frame (Higher responsiveness).
+* **State Machine**:
+    1. **SEARCHING**: Scans for faces. Pick largest face.
+    2. **DETECTED**: Voice prompt "Please blink".
+    3. **WAITING_BLINK**:
+        * Extract Eye ROI (Top 50% of face).
+        * Run `haarcascade_eye_tree_eyeglasses.xml`.
+        * Logic: If no eyes detected for >3 frames -> **BLINK CONFIRMED**.
+    4. **RECOGNIZING**:
+        * Run SFace Recognition.
+        * If Match > 0.45 -> Voice "Attendance Registered".
+        * Log Event.
+    5. **COOLDOWN**: Prevents spamming.
+
+### Step 4: Recognition (SFace)
+
+* **Algorithm**: SphereFace (SFace) - Sigmoid-like loss function.
+* **Input**: Aligned face crop (using 5 landmarks from YuNet).
+* **Output**: 128-d Embedding.
+* **Metric**: Cosine Similarity.
 
 ---
 
 ## 3. The Memory Architecture (RAM Strategy)
 
-### 3.1 The "Heavy" Process (Main)
-*   **Loads**: `cv2` (OpenCV), `numpy`, `face_recognition` (wrapper), `dlib` (C++ Engine).
-*   **Memory Footprint**:
-    *   Python Interpreter: ~20MB
-    *   dlib Models (`shape_predictor_68_face_landmarks.dat` + `resnet_model_v1.dat`): ~500MB
-    *   Video Buffers: ~50MB
-    *   **Total**: ~600MB.
+### 3.1 Threading Model (Single Process)
 
-### 3.2 The "Light" Process (Web Server)
-*   **Trigger**: Spawns only when user presses 's'.
-*   **Loads**: `flask`, `socket`, `threading`.
-*   **Crucial Optimization**: The `import face_recognition` statement is *hidden* inside the Main Loop function scope. Therefore, this process *never* imports dlib.
-*   **Memory Footprint**: ~30MB.
-*   **Lifecycle**:
-    *   *Start*: `multiprocessing.Process(target=run_flask_app).start()` -> Clones interpreter -> Imports Flask -> Listens on Port 5000.
-    *   *Stop*: `process.terminate()` -> SIGTERM signal -> Memory instantly released to OS.
+* **Main Thread**: Runs the Heavy Vision Loop (`cv2`, `numpy`, Neural Nets).
+* **Daemon Thread**: Runs Flask (`app.run`).
+* **IPC (Inter-Process Communication)**:
+  * *Video*: Shared `frame_buffer` variable (Lock-less for speed, acceptable tearing risk).
+  * *Control*: Global variables `current_mode`, `manual_recording_active`.
+* **Memory Footprint**:
+  * Reduced by ~40% compared to Multiprocessing.
+  * Shared Address Space avoids pickling/serialization overhead.
+
+### 3.2 Recording Strategy
+
+* **Manual Trigger**: User presses REC button.
+* **Format**: Tries `H.264` (avc1) first, falls back to `mp4v`, then `vp09`.
+* **Chunking**: Automatically splits files every 10 minutes (`SEGMENT_DURATION = 600`) to prevent data loss.
 
 ---
 
 ## 4. The Web Interface (The "Frontend")
 
 ### 4.1 Backend (Flask)
-*   **Route `/`**: Serves `HTML_TEMPLATE`.
-*   **Route `/api/photos`**:
-    *   Scans `attendance_photos/`.
-    *   Sorts by `os.path.getmtime` (Reverse).
-    *   Parses filenames to human-readable names.
-    *   Returns JSON: `[{"url": "/photos/...", "name": "...", "timestamp": "..."}]`
-*   **Route `/photos/<filename>`**: Static file server for the images.
 
-### 4.2 Frontend (HTML/JS)
-*   **Styling**: Dark Mode CSS Variables (`--bg-color: #0d1117`).
-*   **Logic**:
-    *   `fetchPhotos()`: Async Await function.
-    *   **Data Binding**: Compares `grid.dataset.key` (a hash of current filenames) vs new filenames. Only updates DOM if changed (Virtual DOM concept).
-    *   **Injection**: Appends HTML Strings to the Grid Container.
+* **API Design**: RESTful JSON endpoints.
+* **Routes**:
+  * `/api/chat`: **Ollama** Integration. Injects "Student Notes" + "Lobby Logs" into System Prompt.
+  * `/api/logs`: Returns last 500 CSV entries (Reversed).
+  * `/api/notes`: Read/Write `student_notes.md`.
+  * `/video_feed`: MJPEG Stream Generator.
+
+### 4.2 Frontend (Stripe-Inspired Glassmorphism)
+
+* **Tech**: Vanilla HTML/CSS/JS (Single File).
+* **Visuals**:
+  * Mesh Gradient Background.
+  * Glassy Cards (`backdrop-filter: blur(20px)`).
+  * Responsive Grid Layout.
+* **Tabs**: Live Feed, Logs, Photos, Recordings, Notes.
+* **Real-time Interaction**:
+  * Settings Sidebar (Mode Switch, Threshold).
+  * Live Chat with AI (Typing indicators, Auto-scroll).
 
 ---
 
@@ -118,29 +154,36 @@ This pipeline runs inside the `while True` loop of the main process.
 
 What happens when "User X" walks in?
 
-1.  **Frame N**: Camera captures User X.
-2.  **Detection**: Haar Cascade finds a face rectangle.
-3.  **Recognition**: dlib computes vector, matches to "User X".
-4.  **State Check**: Code checks `if "User X" in present_people`.
-    *   *Result*: False.
-5.  **Action Trigger**:
-    *   **Log**: Appends line to csv: `2023-10-27 10:00:00,ENTERED,User X,...`
-    *   **Evidence**:
-        *   Copies current frame.
-        *   `cv2.putText`: Burns "10:00:00 - User X" in red text onto the pixels.
-        *   `cv2.imwrite`: Saves JPG to disk.
-6.  **State Update**: `present_people["User X"] = <Current Time>`.
+1. **Detection**: YuNet finds face at (x,y).
+2. **Mode Check**:
+    * *Surveillance*: Immediate Recognition.
+    * *Attendance*: Wait for Blink -> Trigger Recognition.
+3. **Matching**: Embedding `v1` vs Known `v2`. Score `0.72` (> 0.45).
+4. **Lobby Check**: `if "User X" not in present_people`.
+5. **Action Trigger**:
+    * **Log**: CSV Append `Timestamp, ENTERED, User X, PhotoPath`.
+    * **Evidence**: Frame copied -> Timestamp burned -> Saved to JPG.
+6. **Heartbeat**: `present_people["User X"] = Now()`.
 
 ---
 
-## 6. Logic Trace: The "Exit" Event
+## 6. Logic Trace: The "Exit" Event (The 3-Second Rule)
 
-1.  **Frame N+100**: User X walks away.
-2.  **Detection**: No faces found.
-3.  **Loop**: Code iterates through keys in `present_people`.
-4.  **Timestamp Check**: `Current Time - present_people["User X"]`.
-    *   *Value*: 3.1 seconds.
-    *   *Threshold*: 3.0 seconds.
-5.  **Action Trigger**:
-    *   **Log**: Appends line to csv: `...,EXITED,User X`
-    *   **State Update**: `del present_people["User X"]`.
+1. **Loop**: Every frame, iterate `present_people`.
+2. **Check**: `Now() - last_seen_timestamp`.
+3. **Threshold**: If `Diff > 3.0` Seconds.
+4. **Action**:
+    * **Log**: CSV Append `Timestamp, EXITED, User X`.
+    * **Cleanup**: Remove "User X" from `present_people` dict.
+
+---
+
+## 7. AI Assistant Integration (Ollama)
+
+* **Model**: `qwen2.5:7b` (Configurable).
+* **Context Window**:
+  * **System Prompt**: "You are Visor..."
+  * **Dynamic Data**: Injects content of `student_notes.md` + Last 500 Logs.
+* **Capabilities**:
+  * "Who is here right now?" (Parses Logs).
+  * "Is John in trouble?" (Reads Notes).
