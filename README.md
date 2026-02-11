@@ -81,9 +81,7 @@ Visor AI is designed to be **Air-Gapped**.
 [PROTOTYPE_IMAGES](https://github.com/vishwajeetpawar123/VISOR-AI/tree/main/working%20prototype%20images)
 
 
-| Live Feed & Dashboard | AI Chat Assistant |
-| :---: | :---: |
-| *Real-time recognition with bounding boxes.* | *Asking the AI "Who is absent?"* |
+
 
 ---
 
